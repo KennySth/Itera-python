@@ -97,3 +97,8 @@ class ExplorationTelemetry(BaseModel):
     fecha: datetime = Field(default_factory=datetime.utcnow)
 
     model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
+
+class MatchRequest(BaseModel):
+    student_id: str = Field(..., description="UUID del estudiante")
+    skills: List[str] = Field(default_factory=list, description="Lista de habilidades del estudiante")
+

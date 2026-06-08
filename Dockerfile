@@ -11,27 +11,25 @@ RUN apt-get update && apt-get install -y \
 # Copiar requirements
 COPY requirements.txt .
 
-# Crear directorio para pip cache
+# Instalar dependencias globalmente en builder
 RUN pip install --upgrade pip && \
-    pip install --user --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt
 
 # Runtime stage
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copiar dependencias desde builder
-COPY --from=builder /root/.local /root/.local
+# Copiar dependencias de Python desde builder (site-packages)
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copiar código
 COPY . .
 
-# Crear usuario no-root
+# Crear usuario no-root y dar permisos a la app
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
-
-# Hacer pip instalable
-ENV PATH=/root/.local/bin:$PATH
 
 EXPOSE 8000
 
