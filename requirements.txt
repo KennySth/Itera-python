@@ -1,14 +1,4 @@
 <<<<<<< Updated upstream
-fastapi
-uvicorn
-pydantic
-pydantic-settings
-motor
-pymongo
-python-dotenv
-httpx
-beautifulsoup4
-//
 fastapi==0.111.0
 uvicorn==0.29.0
 requests==2.31.0

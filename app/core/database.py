@@ -1,3 +1,4 @@
+from pymongo import ASCENDING, IndexModel
 from motor.motor_asyncio import AsyncIOMotorClient
 from app.core.config import settings
 import logging
@@ -17,7 +18,15 @@ async def connect_to_mongo():
     try:
         # Verify connection
         await db.client.admin.command('ping')
-        logger.info("Connected to MongoDB Atlas!")
+        
+        # RNF-12: Integridad - Crear índice TTL para ofertas obsoletas
+        # Las ofertas se borrarán cuando su 'fecha_expiracion' sea alcanzada
+        await db.db["ofertas_laborales"].create_index(
+            [("fecha_expiracion", ASCENDING)], 
+            expireAfterSeconds=0
+        )
+        
+        logger.info("Connected to MongoDB Atlas and TTL Indexes created!")
     except Exception as e:
         logger.error(f"Could not connect to MongoDB: {e}")
         raise e
