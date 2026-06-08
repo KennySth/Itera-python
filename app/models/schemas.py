@@ -97,8 +97,3 @@ class ExplorationTelemetry(BaseModel):
     fecha: datetime = Field(default_factory=datetime.utcnow)
 
     model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
-
-class MatchRequest(BaseModel):
-    estudiante_id: str = Field(..., description="UUID del estudiante")
-    vector_perfil: List[float] = Field(..., description="Vector semántico del perfil del estudiante")
-    objetivo: str = Field(..., description="Rol objetivo (ej. Python Developer)")
