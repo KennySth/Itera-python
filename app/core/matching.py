@@ -28,14 +28,15 @@ def calculate_cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float
         
     return float(np.dot(a, b) / (norm_a * norm_b))
 
+from collections import Counter
+
 async def evaluate_student_compatibility(
     student_id: str, 
-    student_vector: List[float], 
-    target_role: str
+    student_skills: List[str]
 ) -> Dict[str, Any]:
     """
-    Compara el perfil de un estudiante contra las ofertas del mercado laboral
-    y guarda el resultado en el histórico de matches.
+    Compara las habilidades de un estudiante contra las ofertas del mercado laboral
+    y calcula el Match-Score y la brecha de habilidades.
     """
     db = get_database()
     if db is None:
@@ -44,56 +45,52 @@ async def evaluate_student_compatibility(
     offers_col = db["ofertas_laborales"]
     matches_col = db["historico_matches"]
     
-    # 1. Buscar ofertas relevantes para el objetivo
-    # Usamos regex para una búsqueda flexible en el puesto
-    query = {"puesto": {"$regex": target_role, "$options": "i"}}
-    cursor = offers_col.find(query)
-    offers_raw = await cursor.to_list(length=100)
+    # 1. Obtener todas las ofertas para analizar el mercado (Top skills demandadas)
+    cursor = offers_col.find({}, {"habilidades_requeridas": 1})
+    all_offers = await cursor.to_list(length=500)
     
-    if not offers_raw:
-        logger.info(f"No se encontraron ofertas para el rol: {target_role}")
+    if not all_offers:
         return {
-            "score_general": 0.0,
-            "total_evaluado": 0,
-            "top_matches": [],
-            "message": "No hay ofertas suficientes para este rol en la base de datos."
+            "score": 0,
+            "habilidades_faltantes": [],
+            "recomendaciones": ["No hay datos de mercado suficientes. Intenta ejecutar el scraper."]
         }
-        
-    # 2. Calcular similitudes vectoriales
-    scored_matches: List[Dict[str, Any]] = []
-    for doc in offers_raw:
-        # Validar si tiene vector semántico
-        if "vector_semantico" in doc and doc["vector_semantico"]:
-            score = calculate_cosine_similarity(student_vector, doc["vector_semantico"])
-            scored_matches.append({
-                "offer_id": str(doc["_id"]),
-                "puesto": doc["puesto"],
-                "empresa": doc.get("empresa", "Confidencial"),
-                "score": round(score * 100, 2)
-            })
-            
-    # 3. Calcular score general (promedio de los mejores 5 matches)
-    scored_matches.sort(key=lambda x: x["score"], reverse=True)
-    top_matches = scored_matches[:5]
+
+    # 2. Identificar las Top 15 habilidades más demandadas en el mercado actualmente
+    market_skills_counter = Counter()
+    for doc in all_offers:
+        market_skills_counter.update(doc.get("habilidades_requeridas", []))
     
-    avg_score: float = 0.0
-    if top_matches:
-        avg_score = sum(m["score"] for m in top_matches) / len(top_matches)
-        
-    # 4. Persistir en MatchHistory (RF-10)
-    match_entry = MatchHistory(
-        estudiante_id=student_id,
-        objetivo_evaluado=target_role,
-        score_general=avg_score,
-        version_modelo_ia="v1-cosine-similarity",
-        fecha_evaluacion=datetime.utcnow()
-    )
+    top_market_skills = [skill for skill, count in market_skills_counter.most_common(15)]
     
-    await matches_col.insert_one(match_entry.model_dump(by_alias=True, exclude_none=True))
+    # 3. Calcular Match-Score basado en intersección de conjuntos
+    student_skills_set = set(s.lower() for s in student_skills)
+    market_skills_set = set(s.lower() for s in top_market_skills)
+    
+    intersection = student_skills_set.intersection(market_skills_set)
+    
+    # Score simple: porcentaje de habilidades del top mercado que posee el estudiante
+    score = int((len(intersection) / len(market_skills_set)) * 100) if market_skills_set else 0
+    
+    # 4. Identificar habilidades faltantes (Gap Analysis)
+    missing_skills = [s for s in top_market_skills if s.lower() not in student_skills_set]
+    
+    # 5. Generar recomendaciones
+    recommendations = []
+    if missing_skills:
+        top_missing = missing_skills[:3]
+        recommendations.append(f"Para mejorar tu perfil, considera aprender: {', '.join(top_missing)}.")
+    
+    if score < 50:
+        recommendations.append("Tu nivel de coincidencia es bajo. Enfócate en las habilidades core del mercado.")
+    else:
+        recommendations.append("¡Buen trabajo! Estás alineado con las tendencias. Sigue profundizando en especialidades.")
+
+    # 6. Persistir en MatchHistory (opcional para el MVP)
+    # ...
     
     return {
-        "score_general": round(avg_score, 2),
-        "total_evaluado": len(scored_matches),
-        "top_matches": top_matches,
-        "version_ia": "v1-cosine-similarity"
+        "score": score,
+        "habilidades_faltantes": missing_skills[:5],
+        "recomendaciones": recommendations
     }

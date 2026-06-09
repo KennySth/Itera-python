@@ -2,6 +2,7 @@ import uvicorn
 from contextlib import asynccontextmanager
 from typing import Dict
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.database import connect_to_mongo, close_mongo_connection, db
 from app.api import router as api_router
@@ -21,8 +22,17 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Montar el router principal que contiene todas las rutas bajo /api/ia/
-app.include_router(api_router, prefix="/api")
+# Configurar CORS para permitir comunicación con Angular
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:4200", "http://localhost"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Montar el router principal sin prefijo interno (el Gateway maneja los prefijos)
+app.include_router(api_router)
 
 @app.get("/", tags=["Root"])
 async def root() -> Dict[str, str]:

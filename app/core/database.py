@@ -13,8 +13,8 @@ db = Database()
 
 async def connect_to_mongo():
     logger.info("Connecting to MongoDB...")
-    db.client = AsyncIOMotorClient(settings.MONGODB_URL)
-    db.db = db.client[settings.DATABASE_NAME]
+    db.client = AsyncIOMotorClient(settings.MONGODB_URI)
+    db.db = db.client[settings.MONGODB_DATABASE]
     try:
         # Verify connection
         await db.client.admin.command('ping')

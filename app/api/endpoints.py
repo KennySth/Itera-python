@@ -73,9 +73,8 @@ async def match_evaluate(request: MatchRequest) -> Dict[str, Any]:
     Calcula el Match-Score entre un estudiante y las ofertas del mercado (RF-10).
     """
     result: Dict[str, Any] = await evaluate_student_compatibility(
-        request.estudiante_id, 
-        request.vector_perfil, 
-        request.objetivo
+        request.student_id, 
+        request.skills
     )
     return result
 

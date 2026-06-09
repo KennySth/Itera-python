@@ -7,9 +7,12 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     
     # MongoDB Configuration
-    # Default to localhost if not provided, but Atlas URL should be in .env
-    MONGODB_URL: str = "mongodb://localhost:27017"
-    DATABASE_NAME: str = "itera_db"
+    MONGODB_URI: str = "mongodb://localhost:27017"
+    MONGODB_DATABASE: str = "itera_db"
+
+    # Integrations
+    JWT_SECRET: Optional[str] = None
+    LOGICA_API_URL: Optional[str] = None
 
     model_config = SettingsConfigDict(
         env_file=".env", 
