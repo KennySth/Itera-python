@@ -3,6 +3,7 @@ from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field, ConfigDict
 from app.models.base import PyObjectId
 
+
 class JobOffer(BaseModel):
     id: Optional[PyObjectId] = Field(alias="_id", default=None)
     puesto: str
@@ -18,7 +19,19 @@ class JobOffer(BaseModel):
     vector_semantico: List[float] = Field(default_factory=list)
     version_modelo_ia: Optional[str] = None
     fecha_expiracion: Optional[datetime] = None
-    
+    # ponytail: Enriched fields (Phase 4) - backward compatible, optional
+    categoria_carrera: Optional[str] = Field(
+        default=None, description="ID de categoría de carrera (ej. ciencia-datos-ia)"
+    )
+    categoria_carrera_nombre: Optional[str] = Field(
+        default=None, description="Nombre de categoría (ej. Ciencia de Datos e IA)"
+    )
+    company_tier: Optional[int] = Field(
+        default=None, description="Tier de empresa 1-4 (1=TOP)"
+    )
+    skill_extraction_method: Optional[str] = Field(
+        default=None, description="Método: regex, ai, mixed"
+    )
     model_config = ConfigDict(
         populate_by_name=True,
         arbitrary_types_allowed=True,
@@ -29,10 +42,15 @@ class JobOffer(BaseModel):
                 "fuente": "LinkedIn",
                 "url_origen": "https://linkedin.com/jobs/...",
                 "salario_normalizado_usd": 85000.0,
-                "habilidades_requeridas": ["Python", "FastAPI", "MongoDB"]
+                "habilidades_requeridas": ["Python", "FastAPI", "MongoDB"],
+                "categoria_carrera": "desarrollo-backend",
+                "categoria_carrera_nombre": "Desarrollo Backend",
+                "company_tier": 2,
+                "skill_extraction_method": "regex",
             }
-        }
+        },
     )
+
 
 class CareerMetrics(BaseModel):
     id: Optional[PyObjectId] = Field(alias="_id", default=None)
@@ -47,6 +65,7 @@ class CareerMetrics(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
 
+
 class MarketSkill(BaseModel):
     id: Optional[PyObjectId] = Field(alias="_id", default=None)
     habilidad: str
@@ -56,6 +75,7 @@ class MarketSkill(BaseModel):
     tendencia_mensual: str
 
     model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
+
 
 class ScrapingAudit(BaseModel):
     id: Optional[PyObjectId] = Field(alias="_id", default=None)
@@ -68,15 +88,17 @@ class ScrapingAudit(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
 
+
 class MatchHistory(BaseModel):
     id: Optional[PyObjectId] = Field(alias="_id", default=None)
-    estudiante_id: str # UUID
+    estudiante_id: str  # UUID
     objetivo_evaluado: str
     score_general: float
     version_modelo_ia: str
     fecha_evaluacion: datetime = Field(default_factory=datetime.utcnow)
 
     model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
+
 
 class RecommendationFeedback(BaseModel):
     id: Optional[PyObjectId] = Field(alias="_id", default=None)
@@ -88,6 +110,7 @@ class RecommendationFeedback(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
 
+
 class ExplorationTelemetry(BaseModel):
     id: Optional[PyObjectId] = Field(alias="_id", default=None)
     estudiante_id: str
@@ -98,7 +121,13 @@ class ExplorationTelemetry(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
 
+
 class MatchRequest(BaseModel):
     student_id: str = Field(..., description="UUID del estudiante")
-    skills: List[str] = Field(default_factory=list, description="Lista de habilidades del estudiante")
-
+    skills: List[str] = Field(
+        default_factory=list, description="Lista de habilidades del estudiante"
+    )
+    career_category: Optional[str] = Field(
+        default=None,
+        description="Filtrar por categoría de carrera (ej. desarrollo-frontend, devops-cloud)",
+    )
