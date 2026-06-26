@@ -13,7 +13,7 @@ from datetime import datetime
 from app.core.database import get_database
 from app.core.career_classifier import classify as classify_career
 from app.core.company_filter import normalize_company_name
-from app.models.schemas import MarketSkill, CareerMetrics
+from app.models.schemas import MarketSkill, CareerMetrics, SalarySnapshot
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -211,6 +211,59 @@ def _clean_company_name(text: str) -> str:
     return text or "Confidencial"
 
 
+async def save_salary_snapshots() -> List[str]:
+    """
+    Saves current career metrics as snapshots before recalculation.
+    This preserves historical data for year-over-year comparison.
+    """
+    db = get_database()
+    careers_col = db["metricas_carreras"]
+    snapshots_col = db["salary_snapshots"]
+
+    now = datetime.utcnow()
+    current_year = now.year
+    current_month = now.month
+
+    cursor = careers_col.find({})
+    careers = await cursor.to_list(length=50)
+
+    saved_careers = []
+    for career in careers:
+        titulo = career.get("titulo_carrera")
+        if not titulo:
+            continue
+
+        salary_annual = career.get("salario_anual_usd", {})
+        demanda = career.get("demanda_mercado", {})
+        habilidades = career.get("aprendizaje", {}).get("habilidades_clave", [])
+
+        snapshot = SalarySnapshot(
+            titulo_carrera=titulo,
+            snapshot_year=current_year,
+            snapshot_month=current_month,
+            salario_min=round(salary_annual.get("min", 0), 2),
+            salario_max=round(salary_annual.get("max", 0), 2),
+            salario_promedio=round(salary_annual.get("promedio", 0), 2),
+            volumen_total=demanda.get("volumen_total", 0),
+            tendencia=demanda.get("tendencia", "estable"),
+            habilidades_clave=habilidades[:5],
+            snapshot_date=now,
+        )
+
+        await snapshots_col.update_one(
+            {
+                "titulo_carrera": titulo,
+                "snapshot_year": current_year,
+                "snapshot_month": current_month,
+            },
+            {"$set": snapshot.model_dump(by_alias=True, exclude_none=True)},
+            upsert=True,
+        )
+        saved_careers.append(titulo)
+
+    return saved_careers
+
+
 async def update_career_metrics() -> List[str]:
     """
     Agrupa ofertas por categoría de carrera y calcula métricas agregadas.
@@ -220,7 +273,13 @@ async def update_career_metrics() -> List[str]:
 
     La agrupación se hace por nombre de categoría para mantener
     compatibilidad hacia atrás con datos existentes.
+
+    Antes de recalcular, guarda los datos actuales como snapshots para
+    mantener histórico salarial.
     """
+    # Save snapshots BEFORE recalculating
+    await save_salary_snapshots()
+
     db = get_database()
     offers_col = db["ofertas_laborales"]
     careers_col = db["metricas_carreras"]
@@ -380,6 +439,7 @@ async def clean_legacy_generic_skills() -> Dict[str, int]:
 __all__ = [
     "update_market_skills",
     "update_career_metrics",
+    "save_salary_snapshots",
     "clean_legacy_generic_skills",
     "_get_category_for_offer",
     "_get_fallback_salary",

@@ -66,6 +66,29 @@ class CareerMetrics(BaseModel):
     model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
 
 
+class SalarySnapshot(BaseModel):
+    """
+    Periodic snapshot of career salary metrics for historical comparison.
+    Saved before each update_career_metrics() recalculation.
+    """
+
+    id: Optional[PyObjectId] = Field(alias="_id", default=None)
+    titulo_carrera: str = Field(..., description="Career category name")
+    snapshot_year: int = Field(..., description="Year of the snapshot (e.g., 2025)")
+    snapshot_month: int = Field(..., description="Month of the snapshot (1-12)")
+    salario_min: float = Field(..., description="Minimum annual salary USD")
+    salario_max: float = Field(..., description="Maximum annual salary USD")
+    salario_promedio: float = Field(..., description="Average annual salary USD")
+    volumen_total: int = Field(..., description="Number of offers analyzed")
+    tendencia: str = Field(
+        default="estable", description="Trend: creciente, estable, decreciente"
+    )
+    habilidades_clave: List[str] = Field(default_factory=list)
+    snapshot_date: datetime = Field(default_factory=datetime.utcnow)
+
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
+
+
 class MarketSkill(BaseModel):
     id: Optional[PyObjectId] = Field(alias="_id", default=None)
     habilidad: str

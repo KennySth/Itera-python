@@ -1,5 +1,6 @@
 import asyncio
 import re
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Query, BackgroundTasks
 from app.core.database import get_database
@@ -745,6 +746,87 @@ async def salary_by_career() -> Dict[str, Any]:
             "avg_salary_weighted": round(avg_salary_all, 2),
             "career_count": len(careers),
         },
+    }
+
+
+@router.get("/market/salary-snapshots", tags=["Analytics (RF-07)"])
+async def salary_snapshots(
+    career: Optional[str] = None, years: int = 2
+) -> Dict[str, Any]:
+    """
+    Obtiene historial salarial por carrera para comparaciones año contra año.
+    Returns snapshots grouped by career and year for the specified time range.
+    """
+    database = get_database()
+    snapshots_col = database["salary_snapshots"]
+
+    now = datetime.utcnow()
+    min_year = now.year - years
+
+    # Build match filter
+    match_filter: Dict[str, Any] = {"snapshot_year": {"$gte": min_year}}
+    if career:
+        match_filter["titulo_carrera"] = career
+
+    pipeline: List[Dict[str, Any]] = [
+        {"$match": match_filter},
+        {
+            "$group": {
+                "_id": {
+                    "career": "$titulo_carrera",
+                    "year": "$snapshot_year",
+                },
+                "salario_promedio": {"$avg": "$salario_promedio"},
+                "salario_min": {"$first": "$salario_min"},
+                "salario_max": {"$last": "$salario_max"},
+                "volumen_total": {"$sum": "$volumen_total"},
+                "snapshots_count": {"$sum": 1},
+                "latest_month": {"$max": "$snapshot_month"},
+            }
+        },
+        {
+            "$project": {
+                "_id": 0,
+                "career": "$_id.career",
+                "year": "$_id.year",
+                "salario_promedio": {"$round": ["$salario_promedio", 0]},
+                "salario_min": 1,
+                "salario_max": 1,
+                "volumen_total": 1,
+                "snapshots_count": 1,
+                "latest_month": 1,
+            }
+        },
+        {"$sort": {"career": 1, "year": 1}},
+    ]
+
+    cursor = snapshots_col.aggregate(pipeline)
+    raw_snapshots = await cursor.to_list(length=500)
+
+    # Group by career
+    by_career: Dict[str, List[Dict[str, Any]]] = {}
+    for s in raw_snapshots:
+        career_name = s["career"]
+        if career_name not in by_career:
+            by_career[career_name] = []
+        by_career[career_name].append(
+            {
+                "year": s["year"],
+                "salario_promedio": s["salario_promedio"],
+                "salario_min": s["salario_min"],
+                "salario_max": s["salario_max"],
+                "volumen_total": s["volumen_total"],
+            }
+        )
+
+    # Get available years for filter UI
+    available_years = sorted(set(s["year"] for s in raw_snapshots), reverse=True)
+
+    return {
+        "snapshots": by_career,
+        "available_years": available_years,
+        "total_careers": len(by_career),
+        "year_range": {"from": min_year, "to": now.year},
     }
 
 
