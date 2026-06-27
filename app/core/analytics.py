@@ -13,7 +13,7 @@ from datetime import datetime
 from app.core.database import get_database
 from app.core.career_classifier import classify as classify_career
 from app.core.company_filter import normalize_company_name
-from app.models.schemas import MarketSkill, CareerMetrics
+from app.models.schemas import MarketSkill, CareerMetrics, SalarySnapshot
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -211,6 +211,125 @@ def _clean_company_name(text: str) -> str:
     return text or "Confidencial"
 
 
+async def save_salary_snapshots() -> List[str]:
+    """
+    Saves current career metrics as snapshots before recalculation.
+    This preserves historical data for year-over-year comparison.
+
+    Also generates estimated historical snapshots for previous years
+    if they don't already exist, so the frontend can show multi-year projections.
+    Historical estimates use a growth rate based on tendencia:
+      - creciente: ~8% per year
+      - estable: ~3% per year
+      - decreciente: ~-2% per year
+    """
+    db = get_database()
+    careers_col = db["metricas_carreras"]
+    snapshots_col = db["salary_snapshots"]
+
+    now = datetime.utcnow()
+    current_year = now.year
+    current_month = now.month
+
+    # Growth rates by tendencia (approximate annual salary growth)
+    GROWTH_RATES = {
+        "creciente": 0.08,
+        "estable": 0.03,
+        "decreciente": -0.02,
+    }
+
+    cursor = careers_col.find({})
+    careers = await cursor.to_list(length=50)
+
+    saved_careers = []
+    for career in careers:
+        titulo = career.get("titulo_carrera")
+        if not titulo:
+            continue
+
+        salary_annual = career.get("salario_anual_usd", {})
+        demanda = career.get("demanda_mercado", {})
+        habilidades = career.get("aprendizaje", {}).get("habilidades_clave", [])
+        tendencia = demanda.get("tendencia", "estable")
+        growth_rate = GROWTH_RATES.get(tendencia, 0.03)
+
+        current_salary = round(salary_annual.get("promedio", 0), 2)
+        current_min = round(salary_annual.get("min", 0), 2)
+        current_max = round(salary_annual.get("max", 0), 2)
+        volumen = demanda.get("volumen_total", 0)
+
+        # Save current year snapshot
+        snapshot = SalarySnapshot(
+            titulo_carrera=titulo,
+            snapshot_year=current_year,
+            snapshot_month=current_month,
+            salario_min=current_min,
+            salario_max=current_max,
+            salario_promedio=current_salary,
+            volumen_total=volumen,
+            tendencia=tendencia,
+            habilidades_clave=habilidades[:5],
+            snapshot_date=now,
+        )
+
+        await snapshots_col.update_one(
+            {
+                "titulo_carrera": titulo,
+                "snapshot_year": current_year,
+                "snapshot_month": current_month,
+            },
+            {"$set": snapshot.model_dump(by_alias=True, exclude_none=True)},
+            upsert=True,
+        )
+        saved_careers.append(titulo)
+
+        # Generate estimated historical snapshots for previous 2 years
+        # Only if no snapshot exists for that year (preserve real data if available)
+        for years_ago in [1, 2]:
+            hist_year = current_year - years_ago
+            existing = await snapshots_col.find_one(
+                {
+                    "titulo_carrera": titulo,
+                    "snapshot_year": hist_year,
+                }
+            )
+            if existing:
+                continue  # Don't overwrite real historical data
+
+            # Estimate: reverse-apply growth rate to get historical salary
+            factor = (1 + growth_rate) ** years_ago
+            hist_salary = round(current_salary / factor, 2)
+            hist_min = round(current_min / factor, 2)
+            hist_max = round(current_max / factor, 2)
+            # Volume was slightly lower in the past for growing careers
+            hist_volume = max(1, int(volumen / (1 + growth_rate * years_ago * 0.5)))
+
+            hist_snapshot = SalarySnapshot(
+                titulo_carrera=titulo,
+                snapshot_year=hist_year,
+                snapshot_month=current_month,
+                salario_min=hist_min,
+                salario_max=hist_max,
+                salario_promedio=hist_salary,
+                volumen_total=hist_volume,
+                tendencia=tendencia,
+                habilidades_clave=habilidades[:5],
+                snapshot_date=now,
+            )
+
+            await snapshots_col.update_one(
+                {
+                    "titulo_carrera": titulo,
+                    "snapshot_year": hist_year,
+                    "snapshot_month": current_month,
+                },
+                {"$set": hist_snapshot.model_dump(by_alias=True, exclude_none=True)},
+                upsert=True,
+            )
+
+    return saved_careers
+
+
 async def update_career_metrics() -> List[str]:
     """
     Agrupa ofertas por categoría de carrera y calcula métricas agregadas.
@@ -220,7 +339,13 @@ async def update_career_metrics() -> List[str]:
 
     La agrupación se hace por nombre de categoría para mantener
     compatibilidad hacia atrás con datos existentes.
+
+    Antes de recalcular, guarda los datos actuales como snapshots para
+    mantener histórico salarial.
     """
+    # Save snapshots BEFORE recalculating
+    await save_salary_snapshots()
+
     db = get_database()
     offers_col = db["ofertas_laborales"]
     careers_col = db["metricas_carreras"]
@@ -380,6 +505,7 @@ async def clean_legacy_generic_skills() -> Dict[str, int]:
 __all__ = [
     "update_market_skills",
     "update_career_metrics",
+    "save_salary_snapshots",
     "clean_legacy_generic_skills",
     "_get_category_for_offer",
     "_get_fallback_salary",

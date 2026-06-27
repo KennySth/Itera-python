@@ -32,6 +32,20 @@ class JobOffer(BaseModel):
     skill_extraction_method: Optional[str] = Field(
         default=None, description="Método: regex, ai, mixed"
     )
+    descripcion_completa: Optional[str] = Field(
+        default=None,
+        description="Descripción completa del puesto (scrapeado de la página individual)",
+    )
+    requisitos: Optional[List[str]] = Field(
+        default=None, description="Lista de requisitos extraídos de la descripción"
+    )
+    beneficios: Optional[List[str]] = Field(
+        default=None, description="Beneficios extraídos de la descripción"
+    )
+    modalidad_detalle: Optional[str] = Field(
+        default=None,
+        description="Modalidad detallada (presencial, remoto, híbrido) extraída de la página",
+    )
     model_config = ConfigDict(
         populate_by_name=True,
         arbitrary_types_allowed=True,
@@ -62,6 +76,29 @@ class CareerMetrics(BaseModel):
     analisis_competitivo: Dict[str, Any]
     aprendizaje: Dict[str, Any]
     ultima_actualizacion: datetime = Field(default_factory=datetime.utcnow)
+
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
+
+
+class SalarySnapshot(BaseModel):
+    """
+    Periodic snapshot of career salary metrics for historical comparison.
+    Saved before each update_career_metrics() recalculation.
+    """
+
+    id: Optional[PyObjectId] = Field(alias="_id", default=None)
+    titulo_carrera: str = Field(..., description="Career category name")
+    snapshot_year: int = Field(..., description="Year of the snapshot (e.g., 2025)")
+    snapshot_month: int = Field(..., description="Month of the snapshot (1-12)")
+    salario_min: float = Field(..., description="Minimum annual salary USD")
+    salario_max: float = Field(..., description="Maximum annual salary USD")
+    salario_promedio: float = Field(..., description="Average annual salary USD")
+    volumen_total: int = Field(..., description="Number of offers analyzed")
+    tendencia: str = Field(
+        default="estable", description="Trend: creciente, estable, decreciente"
+    )
+    habilidades_clave: List[str] = Field(default_factory=list)
+    snapshot_date: datetime = Field(default_factory=datetime.utcnow)
 
     model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
 
@@ -131,3 +168,85 @@ class MatchRequest(BaseModel):
         default=None,
         description="Filtrar por categoría de carrera (ej. desarrollo-frontend, devops-cloud)",
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Learning Paths (Roadmap)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class LearningResource(BaseModel):
+    """A single learning resource (course, article, practice, tool, book)."""
+
+    type: str = Field(..., description="course | article | practice | tool | book")
+    name: str
+    url: str
+    is_free: bool = True
+    description: Optional[str] = None
+
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
+
+
+class LearningNode(BaseModel):
+    """A single step in a learning path."""
+
+    id: str
+    name: str
+    description: str
+    difficulty: str = Field(
+        default="basic", description="basic | intermediate | advanced"
+    )
+    estimated_weeks: int = Field(default=2, ge=1, le=52)
+    status: str = Field(
+        default="planned", description="completed | in-progress | planned | attention"
+    )
+    icon: str = Field(default="bi-book", description="Bootstrap icon class")
+    order: int = Field(default=0, description="Sort order within the path")
+    resources: List[LearningResource] = Field(default_factory=list)
+
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
+
+
+class LearningPath(BaseModel):
+    """A complete learning path for an academic goal."""
+
+    id: Optional[PyObjectId] = Field(alias="_id", default=None)
+    goal_id: str = Field(
+        ...,
+        description="Matching academicGoal (ej. Backend, AI, Cloud, Frontend, General)",
+    )
+    title: str
+    subtitle: str
+    color: str = Field(default="#6366f1", description="Primary hex color")
+    nodes: List[LearningNode] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
+
+
+class UserLearningProgress(BaseModel):
+    """Tracks a user's progress through a learning path."""
+
+    id: Optional[PyObjectId] = Field(alias="_id", default=None)
+    user_id: str = Field(..., description="UUID del estudiante")
+    goal_id: str = Field(..., description="Goal ID matching the learning path")
+    completed_nodes: List[str] = Field(
+        default_factory=list, description="List of completed node IDs"
+    )
+    current_node: Optional[str] = Field(
+        default=None, description="ID of current in-progress node"
+    )
+    started_at: datetime = Field(default_factory=datetime.utcnow)
+    last_activity: datetime = Field(default_factory=datetime.utcnow)
+
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
+
+
+class ToggleNodeRequest(BaseModel):
+    """Request body to toggle a node's completion status."""
+
+    user_id: str
+    goal_id: str
+    node_id: str
+    completed: bool = Field(..., description="True = mark completed, False = unmark")

@@ -1,7 +1,10 @@
 import asyncio
 import re
+from datetime import datetime
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 from fastapi import APIRouter, Query, BackgroundTasks
+from fastapi.responses import RedirectResponse, HTMLResponse
 from app.core.database import get_database
 from app.core.computrabajo_scraper import ComputrabajoScraper
 from app.core.linkedin_scraper import LinkedInScraper
@@ -11,6 +14,11 @@ from app.core.matching import evaluate_student_compatibility
 from app.core.career_taxonomy import CAREER_CATEGORIES
 from app.core.company_ranker import TIER_DEFINITIONS, rank_company
 from app.core.skill_extractor import extract_from_offer
+from app.core.skill_taxonomy import (
+    SKILLS_BY_CATEGORY,
+    CATEGORY_DISPLAY,
+    ALL_SKILL_NAMES,
+)
 from app.models.schemas import (
     JobOffer,
     MarketSkill,
@@ -19,11 +27,149 @@ from app.models.schemas import (
     ExplorationTelemetry,
     RecommendationFeedback,
     CareerMetrics,
+    ToggleNodeRequest,
 )
 
 router = APIRouter()
 
+
+# --- Skills Catalog ---
+
+
+@router.get("/skills/catalog", tags=["Skills"])
+async def get_skills_catalog() -> Dict[str, Any]:
+    """
+    Obtiene el catálogo completo de habilidades técnicas organizadas por categoría.
+    Útil para poblar comboboxes y listados de selección en el frontend.
+    """
+    catalog = []
+    for category, skills in SKILLS_BY_CATEGORY.items():
+        catalog.append(
+            {
+                "category": category,
+                "category_label": CATEGORY_DISPLAY.get(category, category),
+                "skills": [s.name for s in skills],
+            }
+        )
+
+    return {
+        "categories": catalog,
+        "total": len(ALL_SKILL_NAMES),
+    }
+
+
 # --- Scraper & Data ---
+
+# --- Proxy / Redirect (external job sites) ---
+
+
+@router.get("/offers/proxy", tags=["Offers"], include_in_schema=False)
+async def proxy_external_offer(
+    url: str = Query(..., description="External job URL to proxy"),
+):
+    """
+    Fetches an external job offer page server-side and returns it to the user.
+    This avoids 403 blocks from external sites (Computrabajo, etc.) because:
+    1. The request originates from our server IP, not the user's browser
+    2. No browser cookies/headers are sent to the external site
+    3. A <base> tag is injected so relative assets (CSS, JS, images) load correctly
+
+    Acts like a 'shared link' preview — the user sees the offer as if cached.
+    """
+    import httpx
+    from bs4 import BeautifulSoup
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
+
+            html = response.text
+            soup = BeautifulSoup(html, "html.parser")
+
+            # Inject <base> tag so relative CSS/JS/images resolve correctly
+            base_url = f"{response.url.scheme}://{response.url.host}"
+            if soup.head:
+                # Remove existing base tags
+                for old_base in soup.head.find_all("base"):
+                    old_base.decompose()
+                # Add our base tag as the first child of head
+                new_base = soup.new_tag("base", href=base_url)
+                soup.head.insert(0, new_base)
+
+            # Add a small floating banner so user knows it's proxied
+            banner = soup.new_tag(
+                "div",
+                style="""
+                position: fixed; top: 0; left: 0; right: 0; z-index: 999999;
+                background: rgba(99,102,241,0.95); color: white; padding: 8px 16px;
+                text-align: center; font-family: system-ui, sans-serif; font-size: 13px;
+                backdrop-filter: blur(8px); display: flex; align-items: center;
+                justify-content: center; gap: 12px;
+            """,
+            )
+            banner.string = "📋 Vista previa de Itera — Esta oferta se muestra a través de nuestro proxy."
+            # Add body padding to account for banner
+            body = soup.body
+            if body:
+                body.insert(0, banner)
+                # Push content down so banner doesn't overlap
+                style_tag = soup.new_tag("style")
+                style_tag.string = "body { padding-top: 40px !important; }"
+                if soup.head:
+                    soup.head.append(style_tag)
+
+            return HTMLResponse(content=str(soup), media_type="text/html")
+
+    except httpx.HTTPStatusError as e:
+        return HTMLResponse(
+            content=f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Error al cargar oferta</title>
+<style>body{{font-family:system-ui,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f8fafc;color:#334155;}}
+.card{{background:white;border-radius:16px;padding:32px;max-width:480px;box-shadow:0 1px 3px rgba(0,0,0,0.1);text-align:center;}}
+h2{{margin:0 0 8px;}}p{{color:#64748b;font-size:14px;margin:8px 0 20px;}}
+a{{display:inline-block;padding:10px 24px;background:#6366f1;color:white;border-radius:12px;text-decoration:none;font-weight:600;font-size:14px;}}
+a:hover{{background:#4f46e5;}}</style></head>
+<body><div class="card">
+<h2>⚠️ Oferta no disponible</h2>
+<p>El sitio externo bloqueó nuestra solicitud (HTTP {e.response.status_code}).</p>
+<a href="{url}" target="_blank" rel="noopener noreferrer">Abrir enlace directo</a>
+</div></body></html>""",
+            media_type="text/html",
+            status_code=200,
+        )
+    except Exception as e:
+        return HTMLResponse(
+            content=f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Error de conexión</title>
+<style>body{{font-family:system-ui,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f8fafc;color:#334155;}}
+.card{{background:white;border-radius:16px;padding:32px;max-width:480px;box-shadow:0 1px 3px rgba(0,0,0,0.1);text-align:center;}}
+h2{{margin:0 0 8px;}}p{{color:#64748b;font-size:14px;margin:8px 0 20px;}}
+a{{display:inline-block;padding:10px 24px;background:#6366f1;color:white;border-radius:12px;text-decoration:none;font-weight:600;font-size:14px;}}
+a:hover{{background:#4f46e5;}}</style></head>
+<body><div class="card">
+<h2>🔌 Error de conexión</h2>
+<p>No se pudo conectar con el sitio externo. Intenta abrir el enlace directamente.</p>
+<a href="{url}" target="_blank" rel="noopener noreferrer">Abrir enlace directo</a>
+</div></body></html>""",
+            media_type="text/html",
+            status_code=200,
+        )
+
+
+# Keep old redirect endpoint for backward compatibility
+@router.get("/offers/redirect", tags=["Offers"], include_in_schema=False)
+async def redirect_to_external(url: str = Query(..., description="External job URL")):
+    return RedirectResponse(url=url, status_code=302)
+
+
+# --- Scraper & Data
 
 
 async def run_scraper_task(query: str, use_ai: bool = False) -> None:
@@ -40,6 +186,10 @@ async def run_scraper_task(query: str, use_ai: bool = False) -> None:
 
     ct_offers = results[0] if not isinstance(results[0], Exception) else []
     li_offers = results[1] if not isinstance(results[1], Exception) else []
+
+    # Enriquecer con descripción completa de páginas individuales (Computrabajo)
+    if ct_offers:
+        ct_offers = await ct_scraper.enrich_with_details(ct_offers)
 
     # Guardamos los resultados
     await ct_scraper.save_offers(ct_offers)
@@ -748,6 +898,87 @@ async def salary_by_career() -> Dict[str, Any]:
     }
 
 
+@router.get("/market/salary-snapshots", tags=["Analytics (RF-07)"])
+async def salary_snapshots(
+    career: Optional[str] = None, years: int = 2
+) -> Dict[str, Any]:
+    """
+    Obtiene historial salarial por carrera para comparaciones año contra año.
+    Returns snapshots grouped by career and year for the specified time range.
+    """
+    database = get_database()
+    snapshots_col = database["salary_snapshots"]
+
+    now = datetime.utcnow()
+    min_year = now.year - years
+
+    # Build match filter
+    match_filter: Dict[str, Any] = {"snapshot_year": {"$gte": min_year}}
+    if career:
+        match_filter["titulo_carrera"] = career
+
+    pipeline: List[Dict[str, Any]] = [
+        {"$match": match_filter},
+        {
+            "$group": {
+                "_id": {
+                    "career": "$titulo_carrera",
+                    "year": "$snapshot_year",
+                },
+                "salario_promedio": {"$avg": "$salario_promedio"},
+                "salario_min": {"$first": "$salario_min"},
+                "salario_max": {"$last": "$salario_max"},
+                "volumen_total": {"$sum": "$volumen_total"},
+                "snapshots_count": {"$sum": 1},
+                "latest_month": {"$max": "$snapshot_month"},
+            }
+        },
+        {
+            "$project": {
+                "_id": 0,
+                "career": "$_id.career",
+                "year": "$_id.year",
+                "salario_promedio": {"$round": ["$salario_promedio", 0]},
+                "salario_min": 1,
+                "salario_max": 1,
+                "volumen_total": 1,
+                "snapshots_count": 1,
+                "latest_month": 1,
+            }
+        },
+        {"$sort": {"career": 1, "year": 1}},
+    ]
+
+    cursor = snapshots_col.aggregate(pipeline)
+    raw_snapshots = await cursor.to_list(length=500)
+
+    # Group by career
+    by_career: Dict[str, List[Dict[str, Any]]] = {}
+    for s in raw_snapshots:
+        career_name = s["career"]
+        if career_name not in by_career:
+            by_career[career_name] = []
+        by_career[career_name].append(
+            {
+                "year": s["year"],
+                "salario_promedio": s["salario_promedio"],
+                "salario_min": s["salario_min"],
+                "salario_max": s["salario_max"],
+                "volumen_total": s["volumen_total"],
+            }
+        )
+
+    # Get available years for filter UI
+    available_years = sorted(set(s["year"] for s in raw_snapshots), reverse=True)
+
+    return {
+        "snapshots": by_career,
+        "available_years": available_years,
+        "total_careers": len(by_career),
+        "year_range": {"from": min_year, "to": now.year},
+    }
+
+
 @router.get("/analytics/skills", response_model=List[MarketSkill], tags=["Analytics"])
 async def get_market_skills() -> List[MarketSkill]:
     """
@@ -802,3 +1033,124 @@ async def record_feedback(feedback: RecommendationFeedback) -> Dict[str, str]:
         feedback.model_dump(by_alias=True, exclude_none=True)
     )
     return {"status": "recorded"}
+
+
+# --- Learning Paths (Roadmap) ---
+
+
+@router.get("/learning/paths", tags=["Learning"])
+async def get_all_learning_paths() -> Dict[str, Any]:
+    """Retorna todas las rutas de aprendizaje disponibles."""
+    db = get_database()
+    cursor = db["learning_paths"].find({}, {"_id": 0}).sort("goal_id", 1)
+    paths = await cursor.to_list(length=20)
+    return {"paths": paths, "total": len(paths)}
+
+
+@router.get("/learning/paths/{goal_id}", tags=["Learning"])
+async def get_learning_path(goal_id: str) -> Dict[str, Any]:
+    """Retorna una ruta específica por goal_id."""
+    db = get_database()
+    path = await db["learning_paths"].find_one({"goal_id": goal_id}, {"_id": 0})
+    if not path:
+        return {"error": "Path not found", "goal_id": goal_id}
+    return path
+
+
+@router.put("/learning/progress", tags=["Learning"])
+async def toggle_node_progress(body: ToggleNodeRequest) -> Dict[str, Any]:
+    """Marca o desmarca un nodo como completado para un usuario."""
+    db = get_database()
+    progress_col = db["user_learning_progress"]
+    now = datetime.utcnow()
+
+    # Find or create progress record
+    progress = await progress_col.find_one(
+        {
+            "user_id": body.user_id,
+            "goal_id": body.goal_id,
+        }
+    )
+
+    if not progress:
+        progress = {
+            "user_id": body.user_id,
+            "goal_id": body.goal_id,
+            "completed_nodes": [],
+            "current_node": None,
+            "started_at": now,
+            "last_activity": now,
+        }
+
+    completed = progress.get("completed_nodes", [])
+
+    if body.completed and body.node_id not in completed:
+        completed.append(body.node_id)
+    elif not body.completed and body.node_id in completed:
+        completed.remove(body.node_id)
+
+    # Determine current_node (first non-completed node)
+    path = await db["learning_paths"].find_one(
+        {"goal_id": body.goal_id}, {"_id": 0, "nodes.id": 1}
+    )
+    current_node = None
+    if path:
+        for node in path.get("nodes", []):
+            if node["id"] not in completed:
+                current_node = node["id"]
+                break
+
+    await progress_col.update_one(
+        {"user_id": body.user_id, "goal_id": body.goal_id},
+        {
+            "$set": {
+                "completed_nodes": completed,
+                "current_node": current_node,
+                "last_activity": now,
+            },
+            "$setOnInsert": {
+                "started_at": now,
+            },
+        },
+        upsert=True,
+    )
+
+    total_nodes = len(path.get("nodes", [])) if path else 0
+    progress_pct = (
+        round((len(completed) / total_nodes * 100), 1) if total_nodes > 0 else 0
+    )
+
+    return {
+        "status": "updated",
+        "completed_nodes": completed,
+        "current_node": current_node,
+        "total_nodes": total_nodes,
+        "progress_percent": progress_pct,
+    }
+
+
+@router.get("/learning/progress/{user_id}", tags=["Learning"])
+async def get_user_progress(user_id: str) -> Dict[str, Any]:
+    """Retorna el progreso del usuario en todas las rutas de aprendizaje."""
+    db = get_database()
+    cursor = db["user_learning_progress"].find({"user_id": user_id}, {"_id": 0})
+    records = await cursor.to_list(length=20)
+
+    enriched = []
+    for rec in records:
+        path = await db["learning_paths"].find_one(
+            {"goal_id": rec["goal_id"]}, {"_id": 0, "nodes": 1}
+        )
+        total = len(path.get("nodes", [])) if path else 0
+        completed_count = len(rec.get("completed_nodes", []))
+        enriched.append(
+            {
+                **rec,
+                "total_nodes": total,
+                "progress_percent": round((completed_count / total * 100), 1)
+                if total > 0
+                else 0,
+            }
+        )
+
+    return {"user_id": user_id, "progress": enriched}
