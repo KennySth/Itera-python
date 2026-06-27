@@ -154,3 +154,85 @@ class MatchRequest(BaseModel):
         default=None,
         description="Filtrar por categoría de carrera (ej. desarrollo-frontend, devops-cloud)",
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Learning Paths (Roadmap)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class LearningResource(BaseModel):
+    """A single learning resource (course, article, practice, tool, book)."""
+
+    type: str = Field(..., description="course | article | practice | tool | book")
+    name: str
+    url: str
+    is_free: bool = True
+    description: Optional[str] = None
+
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
+
+
+class LearningNode(BaseModel):
+    """A single step in a learning path."""
+
+    id: str
+    name: str
+    description: str
+    difficulty: str = Field(
+        default="basic", description="basic | intermediate | advanced"
+    )
+    estimated_weeks: int = Field(default=2, ge=1, le=52)
+    status: str = Field(
+        default="planned", description="completed | in-progress | planned | attention"
+    )
+    icon: str = Field(default="bi-book", description="Bootstrap icon class")
+    order: int = Field(default=0, description="Sort order within the path")
+    resources: List[LearningResource] = Field(default_factory=list)
+
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
+
+
+class LearningPath(BaseModel):
+    """A complete learning path for an academic goal."""
+
+    id: Optional[PyObjectId] = Field(alias="_id", default=None)
+    goal_id: str = Field(
+        ...,
+        description="Matching academicGoal (ej. Backend, AI, Cloud, Frontend, General)",
+    )
+    title: str
+    subtitle: str
+    color: str = Field(default="#6366f1", description="Primary hex color")
+    nodes: List[LearningNode] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
+
+
+class UserLearningProgress(BaseModel):
+    """Tracks a user's progress through a learning path."""
+
+    id: Optional[PyObjectId] = Field(alias="_id", default=None)
+    user_id: str = Field(..., description="UUID del estudiante")
+    goal_id: str = Field(..., description="Goal ID matching the learning path")
+    completed_nodes: List[str] = Field(
+        default_factory=list, description="List of completed node IDs"
+    )
+    current_node: Optional[str] = Field(
+        default=None, description="ID of current in-progress node"
+    )
+    started_at: datetime = Field(default_factory=datetime.utcnow)
+    last_activity: datetime = Field(default_factory=datetime.utcnow)
+
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
+
+
+class ToggleNodeRequest(BaseModel):
+    """Request body to toggle a node's completion status."""
+
+    user_id: str
+    goal_id: str
+    node_id: str
+    completed: bool = Field(..., description="True = mark completed, False = unmark")

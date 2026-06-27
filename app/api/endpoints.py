@@ -20,6 +20,7 @@ from app.models.schemas import (
     ExplorationTelemetry,
     RecommendationFeedback,
     CareerMetrics,
+    ToggleNodeRequest,
 )
 
 router = APIRouter()
@@ -884,3 +885,124 @@ async def record_feedback(feedback: RecommendationFeedback) -> Dict[str, str]:
         feedback.model_dump(by_alias=True, exclude_none=True)
     )
     return {"status": "recorded"}
+
+
+# --- Learning Paths (Roadmap) ---
+
+
+@router.get("/learning/paths", tags=["Learning"])
+async def get_all_learning_paths() -> Dict[str, Any]:
+    """Retorna todas las rutas de aprendizaje disponibles."""
+    db = get_database()
+    cursor = db["learning_paths"].find({}, {"_id": 0}).sort("goal_id", 1)
+    paths = await cursor.to_list(length=20)
+    return {"paths": paths, "total": len(paths)}
+
+
+@router.get("/learning/paths/{goal_id}", tags=["Learning"])
+async def get_learning_path(goal_id: str) -> Dict[str, Any]:
+    """Retorna una ruta específica por goal_id."""
+    db = get_database()
+    path = await db["learning_paths"].find_one({"goal_id": goal_id}, {"_id": 0})
+    if not path:
+        return {"error": "Path not found", "goal_id": goal_id}
+    return path
+
+
+@router.put("/learning/progress", tags=["Learning"])
+async def toggle_node_progress(body: ToggleNodeRequest) -> Dict[str, Any]:
+    """Marca o desmarca un nodo como completado para un usuario."""
+    db = get_database()
+    progress_col = db["user_learning_progress"]
+    now = datetime.utcnow()
+
+    # Find or create progress record
+    progress = await progress_col.find_one(
+        {
+            "user_id": body.user_id,
+            "goal_id": body.goal_id,
+        }
+    )
+
+    if not progress:
+        progress = {
+            "user_id": body.user_id,
+            "goal_id": body.goal_id,
+            "completed_nodes": [],
+            "current_node": None,
+            "started_at": now,
+            "last_activity": now,
+        }
+
+    completed = progress.get("completed_nodes", [])
+
+    if body.completed and body.node_id not in completed:
+        completed.append(body.node_id)
+    elif not body.completed and body.node_id in completed:
+        completed.remove(body.node_id)
+
+    # Determine current_node (first non-completed node)
+    path = await db["learning_paths"].find_one(
+        {"goal_id": body.goal_id}, {"_id": 0, "nodes.id": 1}
+    )
+    current_node = None
+    if path:
+        for node in path.get("nodes", []):
+            if node["id"] not in completed:
+                current_node = node["id"]
+                break
+
+    await progress_col.update_one(
+        {"user_id": body.user_id, "goal_id": body.goal_id},
+        {
+            "$set": {
+                "completed_nodes": completed,
+                "current_node": current_node,
+                "last_activity": now,
+            },
+            "$setOnInsert": {
+                "started_at": now,
+            },
+        },
+        upsert=True,
+    )
+
+    total_nodes = len(path.get("nodes", [])) if path else 0
+    progress_pct = (
+        round((len(completed) / total_nodes * 100), 1) if total_nodes > 0 else 0
+    )
+
+    return {
+        "status": "updated",
+        "completed_nodes": completed,
+        "current_node": current_node,
+        "total_nodes": total_nodes,
+        "progress_percent": progress_pct,
+    }
+
+
+@router.get("/learning/progress/{user_id}", tags=["Learning"])
+async def get_user_progress(user_id: str) -> Dict[str, Any]:
+    """Retorna el progreso del usuario en todas las rutas de aprendizaje."""
+    db = get_database()
+    cursor = db["user_learning_progress"].find({"user_id": user_id}, {"_id": 0})
+    records = await cursor.to_list(length=20)
+
+    enriched = []
+    for rec in records:
+        path = await db["learning_paths"].find_one(
+            {"goal_id": rec["goal_id"]}, {"_id": 0, "nodes": 1}
+        )
+        total = len(path.get("nodes", [])) if path else 0
+        completed_count = len(rec.get("completed_nodes", []))
+        enriched.append(
+            {
+                **rec,
+                "total_nodes": total,
+                "progress_percent": round((completed_count / total * 100), 1)
+                if total > 0
+                else 0,
+            }
+        )
+
+    return {"user_id": user_id, "progress": enriched}
