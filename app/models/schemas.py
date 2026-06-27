@@ -32,6 +32,20 @@ class JobOffer(BaseModel):
     skill_extraction_method: Optional[str] = Field(
         default=None, description="Método: regex, ai, mixed"
     )
+    descripcion_completa: Optional[str] = Field(
+        default=None,
+        description="Descripción completa del puesto (scrapeado de la página individual)",
+    )
+    requisitos: Optional[List[str]] = Field(
+        default=None, description="Lista de requisitos extraídos de la descripción"
+    )
+    beneficios: Optional[List[str]] = Field(
+        default=None, description="Beneficios extraídos de la descripción"
+    )
+    modalidad_detalle: Optional[str] = Field(
+        default=None,
+        description="Modalidad detallada (presencial, remoto, híbrido) extraída de la página",
+    )
     model_config = ConfigDict(
         populate_by_name=True,
         arbitrary_types_allowed=True,

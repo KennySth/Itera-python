@@ -2,8 +2,9 @@ import logging
 import re
 import urllib.parse
 import random
+import asyncio
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from bs4 import BeautifulSoup
 from app.core.scraper_base import BaseScraper
 from app.core.skill_extractor import extract as extract_skills
@@ -139,3 +140,151 @@ class ComputrabajoScraper(BaseScraper):
                 continue
 
         return offers
+
+    async def scrape_detail(self, url: str) -> Dict[str, Any]:
+        """
+        Visit an individual Computrabajo job page and extract full description,
+        requirements, benefits, and modality details.
+        """
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+        }
+
+        html = await self._fetch_page(url, headers=headers)
+        if not html:
+            return {}
+
+        soup = BeautifulSoup(html, "html.parser")
+        result: Dict[str, Any] = {}
+
+        # ── Full description ──────────────────────────────────────────────
+        desc_selectors = [
+            "div.js-cp_description",  # Standard Computrabajo description
+            "div.box_description",  # Alternative container
+            "div[data-job-description]",  # Data-attr based
+            "section.job-description",  # Section-based
+            "div.iOuKBz",  # Dynamic class (fallback)
+        ]
+        description_text = ""
+        for sel in desc_selectors:
+            desc_container = soup.select_one(sel)
+            if desc_container:
+                description_text = desc_container.get_text(separator="\n", strip=True)
+                if len(description_text) > 50:
+                    break
+
+        # Fallback: largest text block in main content
+        if len(description_text) < 50:
+            main = soup.select_one("main, .container, .box_white, #offer")
+            if main:
+                paragraphs = main.find_all("p")
+                texts = [
+                    p.get_text(strip=True)
+                    for p in paragraphs
+                    if len(p.get_text(strip=True)) > 30
+                ]
+                description_text = "\n".join(texts)
+
+        if description_text:
+            result["descripcion_completa"] = description_text
+
+        # ── Requirements ──────────────────────────────────────────────────
+        requisitos: List[str] = []
+        req_selectors = [
+            "div.box_requisitos ul li",
+            "div ul li",  # Generic fallback inside description
+        ]
+        # Try to find a "Requisitos" / "Requisitos del puesto" section
+        requisitos_header = soup.find(string=re.compile(r"requisitos", re.IGNORECASE))
+        if requisitos_header:
+            parent = requisitos_header.find_parent(["div", "section", "h2", "h3"])
+            if parent:
+                items = parent.find_all("li")
+                requisitos = [
+                    li.get_text(strip=True)
+                    for li in items
+                    if len(li.get_text(strip=True)) > 3
+                ]
+
+        if not requisitos:
+            # Fallback: try known selectors
+            for sel in req_selectors:
+                items = soup.select(sel)
+                if items:
+                    requisitos = [
+                        li.get_text(strip=True)
+                        for li in items
+                        if len(li.get_text(strip=True)) > 3
+                    ]
+                    if requisitos:
+                        break
+
+        if requisitos:
+            result["requisitos"] = requisitos
+
+        # ── Benefits ──────────────────────────────────────────────────────
+        beneficios: List[str] = []
+        benef_header = soup.find(
+            string=re.compile(r"beneficios|lo que ofrecemos", re.IGNORECASE)
+        )
+        if benef_header:
+            parent = benef_header.find_parent(["div", "section", "h2", "h3"])
+            if parent:
+                items = parent.find_all("li")
+                beneficios = [
+                    li.get_text(strip=True)
+                    for li in items
+                    if len(li.get_text(strip=True)) > 3
+                ]
+
+        if beneficios:
+            result["beneficios"] = beneficios
+
+        # ── Modality detail ───────────────────────────────────────────────
+        all_text = soup.get_text().lower()
+        if (
+            "remoto" in all_text
+            or "home office" in all_text
+            or "teletrabajo" in all_text
+        ):
+            result["modalidad_detalle"] = "Remoto"
+        elif "híbrido" in all_text or "hibrido" in all_text:
+            result["modalidad_detalle"] = "Híbrido"
+        elif "presencial" in all_text:
+            result["modalidad_detalle"] = "Presencial"
+
+        return result
+
+    async def enrich_with_details(
+        self, offers: List[JobOffer], max_concurrent: int = 5
+    ) -> List[JobOffer]:
+        """
+        Visit individual job pages in parallel (with concurrency limit)
+        to enrich each offer with full description, requirements, and benefits.
+        """
+        sem = asyncio.Semaphore(max_concurrent)
+
+        async def _fetch_one(offer: JobOffer) -> JobOffer:
+            async with sem:
+                try:
+                    detail = await self.scrape_detail(offer.url_origen)
+                    if detail.get("descripcion_completa"):
+                        offer.descripcion_completa = detail["descripcion_completa"]
+                    if detail.get("requisitos"):
+                        offer.requisitos = detail["requisitos"]
+                    if detail.get("beneficios"):
+                        offer.beneficios = detail["beneficios"]
+                    if detail.get("modalidad_detalle"):
+                        offer.modalidad_detalle = detail["modalidad_detalle"]
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to enrich detail for {offer.url_origen}: {e}"
+                    )
+                return offer
+
+        # Run with concurrency limit
+        enriched = await asyncio.gather(*[_fetch_one(o) for o in offers])
+        logger.info(
+            f"Enriched {len(enriched)} offers with detail pages from {self.source_name}"
+        )
+        return list(enriched)

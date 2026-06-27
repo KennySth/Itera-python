@@ -14,6 +14,11 @@ from app.core.matching import evaluate_student_compatibility
 from app.core.career_taxonomy import CAREER_CATEGORIES
 from app.core.company_ranker import TIER_DEFINITIONS, rank_company
 from app.core.skill_extractor import extract_from_offer
+from app.core.skill_taxonomy import (
+    SKILLS_BY_CATEGORY,
+    CATEGORY_DISPLAY,
+    ALL_SKILL_NAMES,
+)
 from app.models.schemas import (
     JobOffer,
     MarketSkill,
@@ -26,6 +31,32 @@ from app.models.schemas import (
 )
 
 router = APIRouter()
+
+
+# --- Skills Catalog ---
+
+
+@router.get("/skills/catalog", tags=["Skills"])
+async def get_skills_catalog() -> Dict[str, Any]:
+    """
+    Obtiene el catálogo completo de habilidades técnicas organizadas por categoría.
+    Útil para poblar comboboxes y listados de selección en el frontend.
+    """
+    catalog = []
+    for category, skills in SKILLS_BY_CATEGORY.items():
+        catalog.append(
+            {
+                "category": category,
+                "category_label": CATEGORY_DISPLAY.get(category, category),
+                "skills": [s.name for s in skills],
+            }
+        )
+
+    return {
+        "categories": catalog,
+        "total": len(ALL_SKILL_NAMES),
+    }
+
 
 # --- Scraper & Data ---
 
@@ -155,6 +186,10 @@ async def run_scraper_task(query: str, use_ai: bool = False) -> None:
 
     ct_offers = results[0] if not isinstance(results[0], Exception) else []
     li_offers = results[1] if not isinstance(results[1], Exception) else []
+
+    # Enriquecer con descripción completa de páginas individuales (Computrabajo)
+    if ct_offers:
+        ct_offers = await ct_scraper.enrich_with_details(ct_offers)
 
     # Guardamos los resultados
     await ct_scraper.save_offers(ct_offers)
