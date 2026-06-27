@@ -215,6 +215,13 @@ async def save_salary_snapshots() -> List[str]:
     """
     Saves current career metrics as snapshots before recalculation.
     This preserves historical data for year-over-year comparison.
+
+    Also generates estimated historical snapshots for previous years
+    if they don't already exist, so the frontend can show multi-year projections.
+    Historical estimates use a growth rate based on tendencia:
+      - creciente: ~8% per year
+      - estable: ~3% per year
+      - decreciente: ~-2% per year
     """
     db = get_database()
     careers_col = db["metricas_carreras"]
@@ -223,6 +230,13 @@ async def save_salary_snapshots() -> List[str]:
     now = datetime.utcnow()
     current_year = now.year
     current_month = now.month
+
+    # Growth rates by tendencia (approximate annual salary growth)
+    GROWTH_RATES = {
+        "creciente": 0.08,
+        "estable": 0.03,
+        "decreciente": -0.02,
+    }
 
     cursor = careers_col.find({})
     careers = await cursor.to_list(length=50)
@@ -236,16 +250,24 @@ async def save_salary_snapshots() -> List[str]:
         salary_annual = career.get("salario_anual_usd", {})
         demanda = career.get("demanda_mercado", {})
         habilidades = career.get("aprendizaje", {}).get("habilidades_clave", [])
+        tendencia = demanda.get("tendencia", "estable")
+        growth_rate = GROWTH_RATES.get(tendencia, 0.03)
 
+        current_salary = round(salary_annual.get("promedio", 0), 2)
+        current_min = round(salary_annual.get("min", 0), 2)
+        current_max = round(salary_annual.get("max", 0), 2)
+        volumen = demanda.get("volumen_total", 0)
+
+        # Save current year snapshot
         snapshot = SalarySnapshot(
             titulo_carrera=titulo,
             snapshot_year=current_year,
             snapshot_month=current_month,
-            salario_min=round(salary_annual.get("min", 0), 2),
-            salario_max=round(salary_annual.get("max", 0), 2),
-            salario_promedio=round(salary_annual.get("promedio", 0), 2),
-            volumen_total=demanda.get("volumen_total", 0),
-            tendencia=demanda.get("tendencia", "estable"),
+            salario_min=current_min,
+            salario_max=current_max,
+            salario_promedio=current_salary,
+            volumen_total=volumen,
+            tendencia=tendencia,
             habilidades_clave=habilidades[:5],
             snapshot_date=now,
         )
@@ -260,6 +282,50 @@ async def save_salary_snapshots() -> List[str]:
             upsert=True,
         )
         saved_careers.append(titulo)
+
+        # Generate estimated historical snapshots for previous 2 years
+        # Only if no snapshot exists for that year (preserve real data if available)
+        for years_ago in [1, 2]:
+            hist_year = current_year - years_ago
+            existing = await snapshots_col.find_one(
+                {
+                    "titulo_carrera": titulo,
+                    "snapshot_year": hist_year,
+                }
+            )
+            if existing:
+                continue  # Don't overwrite real historical data
+
+            # Estimate: reverse-apply growth rate to get historical salary
+            factor = (1 + growth_rate) ** years_ago
+            hist_salary = round(current_salary / factor, 2)
+            hist_min = round(current_min / factor, 2)
+            hist_max = round(current_max / factor, 2)
+            # Volume was slightly lower in the past for growing careers
+            hist_volume = max(1, int(volumen / (1 + growth_rate * years_ago * 0.5)))
+
+            hist_snapshot = SalarySnapshot(
+                titulo_carrera=titulo,
+                snapshot_year=hist_year,
+                snapshot_month=current_month,
+                salario_min=hist_min,
+                salario_max=hist_max,
+                salario_promedio=hist_salary,
+                volumen_total=hist_volume,
+                tendencia=tendencia,
+                habilidades_clave=habilidades[:5],
+                snapshot_date=now,
+            )
+
+            await snapshots_col.update_one(
+                {
+                    "titulo_carrera": titulo,
+                    "snapshot_year": hist_year,
+                    "snapshot_month": current_month,
+                },
+                {"$set": hist_snapshot.model_dump(by_alias=True, exclude_none=True)},
+                upsert=True,
+            )
 
     return saved_careers
 
