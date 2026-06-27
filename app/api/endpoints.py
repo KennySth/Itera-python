@@ -2,7 +2,9 @@ import asyncio
 import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 from fastapi import APIRouter, Query, BackgroundTasks
+from fastapi.responses import RedirectResponse, HTMLResponse
 from app.core.database import get_database
 from app.core.computrabajo_scraper import ComputrabajoScraper
 from app.core.linkedin_scraper import LinkedInScraper
@@ -26,6 +28,34 @@ from app.models.schemas import (
 router = APIRouter()
 
 # --- Scraper & Data ---
+
+# --- Proxy / Redirect (external job sites) ---
+
+
+@router.get("/offers/redirect", tags=["Offers"], include_in_schema=False)
+async def redirect_to_external(url: str = Query(..., description="External job URL")):
+    """
+    Redirects to the external job URL with a clean browser context.
+    Uses a meta-refresh HTML page instead of a 302 to avoid Referer
+    header being sent to the external site.
+    """
+    safe_url = quote(url, safe=":/?#=&")
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="refresh" content="0; url={safe_url}">
+  <title>Redirigiendo...</title>
+</head>
+<body>
+  <p>Redirigiendo a la oferta externa...</p>
+  <a href="{safe_url}">Click aquí si no redirige automáticamente</a>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
+
+
+# --- Scraper & Data
 
 
 async def run_scraper_task(query: str, use_ai: bool = False) -> None:
