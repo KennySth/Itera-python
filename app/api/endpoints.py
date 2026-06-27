@@ -32,27 +32,110 @@ router = APIRouter()
 # --- Proxy / Redirect (external job sites) ---
 
 
+@router.get("/offers/proxy", tags=["Offers"], include_in_schema=False)
+async def proxy_external_offer(
+    url: str = Query(..., description="External job URL to proxy"),
+):
+    """
+    Fetches an external job offer page server-side and returns it to the user.
+    This avoids 403 blocks from external sites (Computrabajo, etc.) because:
+    1. The request originates from our server IP, not the user's browser
+    2. No browser cookies/headers are sent to the external site
+    3. A <base> tag is injected so relative assets (CSS, JS, images) load correctly
+
+    Acts like a 'shared link' preview — the user sees the offer as if cached.
+    """
+    import httpx
+    from bs4 import BeautifulSoup
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
+
+            html = response.text
+            soup = BeautifulSoup(html, "html.parser")
+
+            # Inject <base> tag so relative CSS/JS/images resolve correctly
+            base_url = f"{response.url.scheme}://{response.url.host}"
+            if soup.head:
+                # Remove existing base tags
+                for old_base in soup.head.find_all("base"):
+                    old_base.decompose()
+                # Add our base tag as the first child of head
+                new_base = soup.new_tag("base", href=base_url)
+                soup.head.insert(0, new_base)
+
+            # Add a small floating banner so user knows it's proxied
+            banner = soup.new_tag(
+                "div",
+                style="""
+                position: fixed; top: 0; left: 0; right: 0; z-index: 999999;
+                background: rgba(99,102,241,0.95); color: white; padding: 8px 16px;
+                text-align: center; font-family: system-ui, sans-serif; font-size: 13px;
+                backdrop-filter: blur(8px); display: flex; align-items: center;
+                justify-content: center; gap: 12px;
+            """,
+            )
+            banner.string = "📋 Vista previa de Itera — Esta oferta se muestra a través de nuestro proxy."
+            # Add body padding to account for banner
+            body = soup.body
+            if body:
+                body.insert(0, banner)
+                # Push content down so banner doesn't overlap
+                style_tag = soup.new_tag("style")
+                style_tag.string = "body { padding-top: 40px !important; }"
+                if soup.head:
+                    soup.head.append(style_tag)
+
+            return HTMLResponse(content=str(soup), media_type="text/html")
+
+    except httpx.HTTPStatusError as e:
+        return HTMLResponse(
+            content=f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Error al cargar oferta</title>
+<style>body{{font-family:system-ui,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f8fafc;color:#334155;}}
+.card{{background:white;border-radius:16px;padding:32px;max-width:480px;box-shadow:0 1px 3px rgba(0,0,0,0.1);text-align:center;}}
+h2{{margin:0 0 8px;}}p{{color:#64748b;font-size:14px;margin:8px 0 20px;}}
+a{{display:inline-block;padding:10px 24px;background:#6366f1;color:white;border-radius:12px;text-decoration:none;font-weight:600;font-size:14px;}}
+a:hover{{background:#4f46e5;}}</style></head>
+<body><div class="card">
+<h2>⚠️ Oferta no disponible</h2>
+<p>El sitio externo bloqueó nuestra solicitud (HTTP {e.response.status_code}).</p>
+<a href="{url}" target="_blank" rel="noopener noreferrer">Abrir enlace directo</a>
+</div></body></html>""",
+            media_type="text/html",
+            status_code=200,
+        )
+    except Exception as e:
+        return HTMLResponse(
+            content=f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Error de conexión</title>
+<style>body{{font-family:system-ui,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f8fafc;color:#334155;}}
+.card{{background:white;border-radius:16px;padding:32px;max-width:480px;box-shadow:0 1px 3px rgba(0,0,0,0.1);text-align:center;}}
+h2{{margin:0 0 8px;}}p{{color:#64748b;font-size:14px;margin:8px 0 20px;}}
+a{{display:inline-block;padding:10px 24px;background:#6366f1;color:white;border-radius:12px;text-decoration:none;font-weight:600;font-size:14px;}}
+a:hover{{background:#4f46e5;}}</style></head>
+<body><div class="card">
+<h2>🔌 Error de conexión</h2>
+<p>No se pudo conectar con el sitio externo. Intenta abrir el enlace directamente.</p>
+<a href="{url}" target="_blank" rel="noopener noreferrer">Abrir enlace directo</a>
+</div></body></html>""",
+            media_type="text/html",
+            status_code=200,
+        )
+
+
+# Keep old redirect endpoint for backward compatibility
 @router.get("/offers/redirect", tags=["Offers"], include_in_schema=False)
 async def redirect_to_external(url: str = Query(..., description="External job URL")):
-    """
-    Redirects to the external job URL with a clean browser context.
-    Uses a meta-refresh HTML page instead of a 302 to avoid Referer
-    header being sent to the external site.
-    """
-    safe_url = quote(url, safe=":/?#=&")
-    html = f"""<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta http-equiv="refresh" content="0; url={safe_url}">
-  <title>Redirigiendo...</title>
-</head>
-<body>
-  <p>Redirigiendo a la oferta externa...</p>
-  <a href="{safe_url}">Click aquí si no redirige automáticamente</a>
-</body>
-</html>"""
-    return HTMLResponse(content=html)
+    return RedirectResponse(url=url, status_code=302)
 
 
 # --- Scraper & Data
