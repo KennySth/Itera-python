@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.database import connect_to_mongo, close_mongo_connection, db
 from app.api import router as api_router
+from app.api.proxy import router as proxy_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -36,6 +37,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Proxy interno: /api/core/* → Scala, /api/logic/* → Prolog (solo en Render combinado)
+app.include_router(proxy_router)
 # Montar el router principal sin prefijo interno (el Gateway maneja los prefijos)
 app.include_router(api_router)
 
