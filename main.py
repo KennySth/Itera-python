@@ -25,7 +25,12 @@ app = FastAPI(
 # Configurar CORS para permitir comunicación con Angular
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:4200", "http://localhost"],
+    allow_origins=[
+        "http://localhost:4200",
+        "http://localhost",
+        "https://itera-frontend.vercel.app",
+        "https://itera-frontend-git-main.vercel.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
