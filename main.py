@@ -29,8 +29,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:4200",
         "http://localhost",
-        "https://itera-frontend.vercel.app",
-        "https://itera-frontend-git-main.vercel.app",
+        "https://itera-workspace.vercel.app",
+        "https://itera-workspace-git-main.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],

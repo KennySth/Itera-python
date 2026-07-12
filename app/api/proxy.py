@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 SCALA_URL = f"http://127.0.0.1:{os.getenv('SCALA_PORT', '8080')}"
-PROLOG_URL = f"http://127.0.0.1:{os.getenv('PROLOG_PORT', '9000')}"
+PROLOG_URL = f"http://127.0.0.1:{os.getenv('PROLOG_PORT', '9001')}"
 
 _proxy_client = httpx.AsyncClient(timeout=30.0, follow_redirects=True)
 
