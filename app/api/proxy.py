@@ -35,10 +35,14 @@ async def _forward(target_base: str, path: str, request: Request) -> Response:
             headers=headers,
             content=body,
         )
+        # Filter hop-by-hop headers from response
+        resp_headers = dict(resp.headers)
+        for h in ("transfer-encoding", "connection", "content-encoding"):
+            resp_headers.pop(h, None)
         return Response(
             content=resp.content,
             status_code=resp.status_code,
-            headers=dict(resp.headers),
+            headers=resp_headers,
         )
     except httpx.ConnectError:
         logger.error("Proxy target unreachable: %s", url)
@@ -58,11 +62,11 @@ async def _forward(target_base: str, path: str, request: Request) -> Response:
 
 @router.api_route("/api/core/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 async def proxy_core(path: str, request: Request):
-    """Proxy /api/core/* → Scala Play :8080"""
+    """Proxy /api/core/* → Scala Play :8080 (keeps /api/core prefix)"""
     return await _forward(SCALA_URL, f"/api/core/{path}", request)
 
 
 @router.api_route("/api/logic/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 async def proxy_logic(path: str, request: Request):
-    """Proxy /api/logic/* → Prolog :9000"""
-    return await _forward(PROLOG_URL, f"/api/logic/{path}", request)
+    """Proxy /api/logic/* → Prolog :9000 (strips /api/logic prefix)"""
+    return await _forward(PROLOG_URL, f"/{path}", request)
