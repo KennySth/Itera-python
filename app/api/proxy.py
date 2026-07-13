@@ -62,11 +62,11 @@ async def _forward(target_base: str, path: str, request: Request) -> Response:
 
 @router.api_route("/api/core/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 async def proxy_core(path: str, request: Request):
-    """Proxy /api/core/* → Scala Play :8080 (strips /api/core prefix)"""
-    return await _forward(SCALA_URL, f"/{path}", request)
+    """Proxy /api/core/* → Scala Play :8080 (preserves /api/core prefix)"""
+    return await _forward(SCALA_URL, f"/api/core/{path}", request)
 
 
 @router.api_route("/api/logic/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 async def proxy_logic(path: str, request: Request):
-    """Proxy /api/logic/* → Prolog :9000 (strips /api/logic prefix)"""
+    """Proxy /api/logic/* → Prolog :9001 (strips /api/logic prefix)"""
     return await _forward(PROLOG_URL, f"/{path}", request)
